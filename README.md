@@ -263,9 +263,6 @@ DEPLOYMENT.md
 render.yaml
 ```
 
-## Interview Summary
-
-This project is a cash flow forecasting platform for SMEs. It helps business owners and CAs upload financial data, track receivables and payables, forecast cash flow for the next 90 days, detect upcoming shortages, and take preventive action before the business runs out of money.
 
 ## Future Improvements
 
