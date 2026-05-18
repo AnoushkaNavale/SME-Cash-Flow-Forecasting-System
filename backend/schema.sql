@@ -1,0 +1,163 @@
+-- ============================================================
+-- SME Cash Flow Forecaster — Database Schema
+-- Run this in your Supabase SQL editor (or psql)
+-- ============================================================
+
+-- Enable UUID generation
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+
+-- ── Enums ─────────────────────────────────────────────────────────────────────
+
+CREATE TYPE transaction_category AS ENUM (
+    'invoice',
+    'payment_received',
+    'payroll',
+    'vendor',
+    'tax',
+    'rent',
+    'loan_emi',
+    'misc_income',
+    'misc_expense'
+);
+
+CREATE TYPE transaction_source AS ENUM (
+    'razorpay',
+    'bank_csv',
+    'gst',
+    'tally',
+    'manual'
+);
+
+CREATE TYPE alert_severity AS ENUM (
+    'low',
+    'medium',
+    'high'
+);
+
+
+-- ── Businesses ────────────────────────────────────────────────────────────────
+
+CREATE TABLE businesses (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        VARCHAR(200)        NOT NULL,
+    gstin       VARCHAR(15)         UNIQUE,         -- 15-char GST number
+    email       VARCHAR(200)        NOT NULL UNIQUE,
+    phone       VARCHAR(15),
+    created_at  TIMESTAMPTZ         NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ
+);
+
+COMMENT ON TABLE businesses IS 'One row per SME using the platform. All other tables are scoped to business_id.';
+COMMENT ON COLUMN businesses.gstin IS '15-character GST Identification Number. Optional until GST API integration.';
+
+
+-- ── Transactions ──────────────────────────────────────────────────────────────
+
+CREATE TABLE transactions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    business_id     UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+
+    date            DATE                    NOT NULL,
+    amount          NUMERIC(14, 2)          NOT NULL,
+    -- Convention: amount > 0 = inflow (money received)
+    --             amount < 0 = outflow (money spent)
+
+    category        transaction_category    NOT NULL,
+    source          transaction_source      NOT NULL,
+    description     TEXT,
+
+    -- For invoices raised but not yet paid
+    is_confirmed    BOOLEAN                 NOT NULL DEFAULT TRUE,
+    due_date        DATE,
+    invoice_number  VARCHAR(50),
+    counterparty    VARCHAR(200),           -- customer or vendor name
+
+    -- Raw ID from the source system (Razorpay payment ID, etc.)
+    external_id     VARCHAR(100),
+
+    created_at      TIMESTAMPTZ             NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE transactions IS 'Every rupee in or out, from any data source.';
+COMMENT ON COLUMN transactions.amount IS 'Positive = inflow. Negative = outflow. Always in INR.';
+COMMENT ON COLUMN transactions.is_confirmed IS 'False = expected/pending (e.g. invoice raised). True = settled.';
+
+-- Indexes for the most common queries
+CREATE INDEX idx_transactions_business_date
+    ON transactions (business_id, date DESC);
+
+CREATE INDEX idx_transactions_business_category
+    ON transactions (business_id, category);
+
+CREATE INDEX idx_transactions_pending
+    ON transactions (business_id, due_date)
+    WHERE is_confirmed = FALSE AND due_date IS NOT NULL;
+
+-- Prevent duplicate Razorpay events
+CREATE UNIQUE INDEX idx_transactions_external_id
+    ON transactions (external_id)
+    WHERE external_id IS NOT NULL;
+
+
+-- ── Forecast Snapshots ────────────────────────────────────────────────────────
+
+CREATE TABLE forecast_snapshots (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    business_id             UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+
+    generated_at            TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    horizon_days            SMALLINT        NOT NULL DEFAULT 90,
+    current_balance         NUMERIC(14, 2)  NOT NULL,
+    minimum_safe_balance    NUMERIC(14, 2)  NOT NULL DEFAULT 50000,
+
+    -- [{date, balance, net_flow, is_risk}, ...] — 90 entries per snapshot
+    forecast_data           JSONB           NOT NULL
+);
+
+COMMENT ON TABLE forecast_snapshots IS 'Latest computed forecast per business. Regenerated on demand.';
+COMMENT ON COLUMN forecast_snapshots.forecast_data IS 'JSONB array: [{date, balance, net_flow, is_risk}]';
+
+CREATE INDEX idx_forecast_business ON forecast_snapshots (business_id, generated_at DESC);
+
+
+-- ── Cash Flow Alerts ──────────────────────────────────────────────────────────
+
+CREATE TABLE cashflow_alerts (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    business_id         UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+
+    alert_date          DATE            NOT NULL,
+    severity            alert_severity  NOT NULL,
+    message             TEXT            NOT NULL,
+    projected_balance   NUMERIC(14, 2)  NOT NULL,
+
+    is_resolved         BOOLEAN         NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE cashflow_alerts IS 'Risk windows generated by the forecast engine.';
+
+CREATE INDEX idx_alerts_business_unresolved
+    ON cashflow_alerts (business_id, alert_date)
+    WHERE is_resolved = FALSE;
+
+
+-- ── Seed data: one test business ─────────────────────────────────────────────
+-- Remove this block before going to production
+
+INSERT INTO businesses (id, name, email, gstin) VALUES
+    ('11111111-1111-1111-1111-111111111111', 'Test SME Pvt Ltd', 'test@sme.com', NULL);
+
+INSERT INTO transactions (business_id, date, amount, category, source, description, is_confirmed) VALUES
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 30, 150000,  'payment_received', 'manual', 'Client A — monthly retainer',     TRUE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 28, -45000,  'payroll',          'manual', 'Payroll — July',                  TRUE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 25, -18000,  'vendor',           'manual', 'Ravi Traders — raw material',     TRUE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 20, 80000,   'payment_received', 'manual', 'Client B — project milestone',    TRUE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 15, -12000,  'rent',             'manual', 'Office rent — July',              TRUE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 10, -9000,   'tax',              'manual', 'GST payment Q2',                  TRUE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE - 5,  120000,  'invoice',          'manual', 'Client C — invoice #INV-047',     FALSE),
+    ('11111111-1111-1111-1111-111111111111', CURRENT_DATE + 15, -45000,  'payroll',          'manual', 'Payroll — August (upcoming)',     FALSE);
+
+-- ── Verify ────────────────────────────────────────────────────────────────────
+SELECT 'Schema created successfully. Businesses: ' || COUNT(*)::text FROM businesses;
