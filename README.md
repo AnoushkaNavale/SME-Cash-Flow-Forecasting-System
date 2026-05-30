@@ -25,6 +25,26 @@ SME stands for Small and Medium Enterprise. Examples include small manufacturers
 - Show cash flow alerts and recommended actions
 - Display a mock working capital lending suggestion
 
+## Screenshots
+
+### Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Transactions
+![Transactions](docs/screenshots/transactions.png)
+
+### GST And Tally Imports
+![GST and Tally imports](docs/screenshots/imports.png)
+
+### CA Client Dashboard
+![CA client dashboard](docs/screenshots/clients.png)
+
+### Notifications
+![Notifications](docs/screenshots/notifications.png)
+
+### Mock Lending Trigger
+![Mock lending trigger](docs/screenshots/lending.png)
+
 ## Tech Stack
 
 ### Frontend

@@ -18,14 +18,31 @@ const DEMO_BUSINESS: Business = {
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000"
 
 export default function App() {
-  const [page, setPage] = useState<Page>("dashboard")
+  const pageFromHash = (): Page => {
+    const hash = window.location.hash.replace("#", "") as Page
+    return ["clients", "dashboard", "transactions", "imports", "upload", "notifications", "lending"].includes(hash)
+      ? hash
+      : "dashboard"
+  }
+  const [page, setPageState] = useState<Page>(pageFromHash)
   const [business, setBusiness] = useState<Business>(DEMO_BUSINESS)
+
+  const setPage = (nextPage: Page) => {
+    window.location.hash = nextPage
+    setPageState(nextPage)
+  }
 
   useEffect(() => {
     fetch(`${API_BASE}/api/businesses/${business.id}`)
       .then(res => res.ok ? res.json() : DEMO_BUSINESS)
       .then(setBusiness)
       .catch(() => setBusiness(DEMO_BUSINESS))
+  }, [])
+
+  useEffect(() => {
+    const onHashChange = () => setPageState(pageFromHash())
+    window.addEventListener("hashchange", onHashChange)
+    return () => window.removeEventListener("hashchange", onHashChange)
   }, [])
 
   const navItems: Array<[Page, string]> = [
